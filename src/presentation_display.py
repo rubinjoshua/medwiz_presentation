@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 
@@ -64,15 +65,91 @@ def _build_layout(input_df: pd.DataFrame, output_df: pd.DataFrame) -> Layout:
     layout = Layout()
     layout.split_column(
         Layout(name="top", ratio=1),
-        Layout(name="bottom", ratio=1),
+        Layout(name="middle", ratio=1),
+        Layout(name="bottom", size=5),
     )
     layout["top"].update(_make_input_table(input_df))
-    layout["bottom"].update(_make_output_table(output_df))
+    layout["middle"].update(_make_output_table(output_df))
+
+    help_table = Table(show_header=False, box=None)
+    help_table.add_column("msg", style="yellow")
+    help_table.add_row(
+        "Type new prescriptions in the terminal below while this screen is running. "
+        "They will appear in the top table as soon as you add them."
+    )
+    layout["bottom"].update(help_table)
     return layout
 
 
+def _display_loop(input_path: Path, output_path: Path, stop_event: threading.Event) -> None:
+    """Background loop that keeps the tables refreshed."""
+
+    with Live(console=console, screen=True, auto_refresh=False) as live:
+        while not stop_event.is_set():
+            if input_path.exists():
+                input_df = pd.read_csv(input_path)
+            else:
+                input_df = pd.DataFrame(columns=["patient_name", "drug_name", "drug_code", "sig_text"])
+
+            if output_path.exists():
+                output_df = pd.read_csv(output_path)
+            else:
+                output_df = pd.DataFrame(
+                    columns=[
+                        "patient_name",
+                        "drug_name",
+                        "drug_code",
+                        "sig_text",
+                        "english_instructions",
+                        "validation_decision",
+                        "ai_validated_emoji",
+                    ]
+                )
+
+            layout = _build_layout(input_df, output_df)
+            live.update(layout, refresh=True)
+            time.sleep(DISPLAY_REFRESH_SECONDS)
+
+
+def _input_loop(input_path: Path, stop_event: threading.Event) -> None:
+    """Foreground loop that lets you add rows while the tables are visible."""
+
+    console.print(
+        "\n[bold]Interactive input:[/bold] While the tables are shown above, you can "
+        "add new prescriptions. These will be picked up by the left-hand "
+        "pipeline the next time it processes rows from input_sigs.csv.\n"
+    )
+
+    while not stop_event.is_set():
+        answer = console.input("Add a new prescription row? [y/N]: ").strip().lower()
+        if answer not in {"y", "yes"}:
+            # Small pause so the Live display can repaint cleanly.
+            time.sleep(0.2)
+            continue
+
+        if input_path.exists():
+            df = pd.read_csv(input_path)
+        else:
+            df = pd.DataFrame(columns=["patient_name", "drug_name", "drug_code", "sig_text"])
+
+        patient_name = console.input("  Patient name: ").strip()
+        drug_name = console.input("  Drug name (as it appears in your DB): ").strip()
+        drug_code = console.input("  Drug code (free text is fine): ").strip()
+        sig_text = console.input("  Sig text (free-hand instructions): ").strip()
+
+        new_row = {
+            "patient_name": patient_name,
+            "drug_name": drug_name,
+            "drug_code": drug_code,
+            "sig_text": sig_text,
+        }
+        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        df.to_csv(input_path, index=False)
+        console.print("[green]  Added row to input table and saved to input_sigs.csv.[/green]\n")
+
+
 def run_display() -> None:
-    """Continuously display the input and output tables.
+    """Continuously display the input and output tables and accept new rows.
 
     Intended to run in the right-hand pane during the presentation.
     """
@@ -84,25 +161,17 @@ def run_display() -> None:
         console.print(f"[red]Expected input file {input_path} to exist. Run `python scripts/setup_data.py` first.[/red]")
         return
 
-    input_df = pd.read_csv(input_path)
+    console.print("Starting live display. You can add new rows at any time below.\n")
 
-    console.print("Starting live display. Waiting for output_sigs.csv to be created...\n")
+    stop_event = threading.Event()
+    display_thread = threading.Thread(
+        target=_display_loop, args=(input_path, output_path, stop_event), daemon=True
+    )
+    display_thread.start()
 
-    with Live(console=console, screen=True, auto_refresh=False) as live:
-        while True:
-            if output_path.exists():
-                output_df = pd.read_csv(output_path)
-            else:
-                output_df = pd.DataFrame(columns=[
-                    "patient_name",
-                    "drug_name",
-                    "drug_code",
-                    "sig_text",
-                    "english_instructions",
-                    "validation_decision",
-                    "ai_validated_emoji",
-                ])
-
-            layout = _build_layout(input_df, output_df)
-            live.update(layout, refresh=True)
-            time.sleep(DISPLAY_REFRESH_SECONDS)
+    try:
+        _input_loop(input_path, stop_event)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Stopping live display...[/yellow]")
+        stop_event.set()
+        display_thread.join(timeout=1.0)
