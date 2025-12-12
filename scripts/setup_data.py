@@ -144,13 +144,15 @@ def write_sig_examples(path: Path) -> None:
         },
     ]
 
-    # Add some simple programmatic variants for more coverage.
+    # Add programmatic variants for more coverage (roughly doubling count).
     base_patterns = [
         ("tablet", "tab"),
         ("capsule", "cap"),
     ]
-    durations = [3, 5, 7]
-    daily_intakes = [1, 2]
+    # Multiple short and longer courses
+    durations = [3, 5, 7, 10, 14, 21]
+    # 1–3 intakes per day
+    daily_intakes = [1, 2, 3]
 
     for duration in durations:
         for intakes in daily_intakes:
@@ -230,6 +232,49 @@ def write_medical_knowledge(path: Path) -> None:
             "max_daily_intakes": 1,
             "min_interval_hours": 24,
             "notes": "Typically taken once daily before a meal.",
+        },
+        # Additional rows to roughly double the size of the knowledge base
+        {
+            "drug_name": "Lisinopril 10mg",
+            "form": "tablet",
+            "max_daily_intakes": 1,
+            "min_interval_hours": 24,
+            "notes": "Commonly taken once daily for hypertension.",
+        },
+        {
+            "drug_name": "Simvastatin 40mg",
+            "form": "tablet",
+            "max_daily_intakes": 1,
+            "min_interval_hours": 24,
+            "notes": "Typically taken once daily in the evening for hyperlipidemia.",
+        },
+        {
+            "drug_name": "Prednisolone 5mg",
+            "form": "tablet",
+            "max_daily_intakes": 2,
+            "min_interval_hours": 12,
+            "notes": "Often given once or twice daily; dosing is highly indication-specific.",
+        },
+        {
+            "drug_name": "Azithromycin 500mg",
+            "form": "tablet",
+            "max_daily_intakes": 1,
+            "min_interval_hours": 24,
+            "notes": "Many regimens use once-daily dosing over a short course (e.g. 3–5 days).",
+        },
+        {
+            "drug_name": "Ciprofloxacin 500mg",
+            "form": "tablet",
+            "max_daily_intakes": 2,
+            "min_interval_hours": 12,
+            "notes": "Common adult dosing is twice daily (every 12 hours).",
+        },
+        {
+            "drug_name": "Insulin glargine",
+            "form": "injection",
+            "max_daily_intakes": 1,
+            "min_interval_hours": 24,
+            "notes": "Typically injected once daily as a long-acting insulin.",
         },
     ]
 
