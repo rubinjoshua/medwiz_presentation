@@ -19,8 +19,8 @@ SIG_COLLECTION_NAME = "sig_examples"
 MED_KB_COLLECTION_NAME = "medical_knowledge"
 
 # Retrieval settings
-SIG_K = 3
-MED_K = 3
+SIG_K = 2
+MED_K = 2
 
 # Presentation settings
 SLEEP_TRANSLATION_STAGE = 2.0  # seconds between major log steps in translation
