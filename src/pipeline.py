@@ -69,7 +69,13 @@ def run_demo() -> None:
                 print(f"  English: {meta['english_instructions']}")
             if meta.get("structured_instructions") is not None:
                 print("  Structured:")
-                print(_pretty_json(meta["structured_instructions"]))
+                structured_val = meta["structured_instructions"]
+                if isinstance(structured_val, str):
+                    try:
+                        structured_val = json.loads(structured_val)
+                    except json.JSONDecodeError:
+                        pass
+                print(_pretty_json(structured_val))
             print()
         time.sleep(SLEEP_TRANSLATION_STAGE)
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from typing import List, Tuple
 
-from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
 
@@ -13,10 +12,20 @@ from .vectorstores import get_sig_examples_retriever
 
 
 _llm = get_chat_llm()
-# We only use the parser for nice formatting instructions; we will parse
-# the JSON manually to be robust to small local models.
-_parser = PydanticOutputParser(pydantic_object=TranslationResult)
-_format_instructions = _parser.get_format_instructions()
+
+# NOTE: We intentionally do NOT use PydanticOutputParser.get_format_instructions() here.
+# For small local models (e.g. llama3.2), the generated JSON schema is large and the
+# model often "forgets" to emit english_instructions and returns only the inner
+# {"sigs": [...]} object. We instead provide a short, explicit contract.
+_TRANSLATION_FORMAT_INSTRUCTIONS = (
+    "Return a single JSON object with EXACTLY these top-level keys:\n"
+    "- english_instructions (string)\n"
+    "- structured (object)\n\n"
+    "The structured object MUST be of the form:\n"
+    "{\"sigs\": [{\"intakes\": <int>, \"intake_period\": <ISO-8601 duration string>, "
+    "\"intake_type\": <string>, \"duration\": <ISO-8601 duration string>}]}\n\n"
+    "Do not wrap in markdown. Do not return only the structured object."
+)
 
 _prompt = ChatPromptTemplate.from_messages(
     [
@@ -24,7 +33,7 @@ _prompt = ChatPromptTemplate.from_messages(
             "system",
             "You are an expert clinical pharmacist. You translate compact, messy "
             "prescription instructions (sigs) into clear English and a structured JSON format.\n\n"
-            "Return ONLY JSON that matches the specified schema. Do not include any extra text.\n\n"
+            "Return ONLY JSON.\n\n"
             "{format_instructions}",
         ),
         (
@@ -36,34 +45,69 @@ _prompt = ChatPromptTemplate.from_messages(
     ]
 )
 
+# Secondary prompt used only as a fallback when the model returns structured JSON
+# without english_instructions.
+_english_only_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "You are an expert clinical pharmacist. Translate the raw sig into a clear, "
+            "patient-friendly English instruction. Return ONLY JSON of the form: "
+            "{\"english_instructions\": \"...\"}.",
+        ),
+        (
+            "human",
+            "Here are similar past examples:\n\n{examples_block}\n\n"
+            "Raw sig: {sig_text}",
+        ),
+    ]
+)
+
 
 def _build_examples_block(docs: List[Document]) -> str:
-    parts = []
+    """Build an examples block.
+
+    IMPORTANT: Examples are shown as full JSON outputs (not separate English/Structured
+    lines) because many small models will otherwise "learn" that only the last JSON-ish
+    thing matters and return just {"sigs": [...] }.
+    """
+
+    parts: list[str] = []
     for i, doc in enumerate(docs, start=1):
         meta = doc.metadata or {}
-        english = meta.get("english_instructions", "")
+        english = str(meta.get("english_instructions", "")).strip()
         structured = meta.get("structured_instructions", "")
+
         # In the vector store we keep structured_instructions as a JSON string
-        # to satisfy Chroma's metadata constraints. If for some reason we get
-        # a dict here, fall back to dumping it.
+        # to satisfy Chroma's metadata constraints.
+        structured_obj: object
         if isinstance(structured, str):
-            structured_str = structured
+            try:
+                structured_obj = json.loads(structured)
+            except json.JSONDecodeError:
+                structured_obj = structured
         else:
-            structured_str = json.dumps(structured, ensure_ascii=False)
+            structured_obj = structured
+
+        example_out = {"english_instructions": english, "structured": structured_obj}
         parts.append(
             f"Example {i}:\n"
-            f"Raw sig: {doc.page_content}\n"
-            f"English: {english}\n"
-            f"Structured: {structured_str}"
+            f"Input sig: {doc.page_content}\n"
+            f"Output JSON: {json.dumps(example_out, ensure_ascii=False)}"
         )
+
     return "\n\n".join(parts) if parts else "(No prior examples available.)"
 
 
-def _parse_translation_output(raw: str, sig_text: str) -> TranslationResult:
+def _parse_translation_output(raw: str) -> TranslationResult:
     """Parse the LLM's raw JSON (or JSON-in-markdown) into TranslationResult.
 
     We try to be forgiving because small local models sometimes ignore parts
     of the formatting instructions.
+
+    Common failure mode: valid JSON followed by extra trailing characters
+    (e.g. an extra '}' or a short explanation), which triggers
+    json.decoder.JSONDecodeError: Extra data.
     """
 
     text = raw.strip()
@@ -74,18 +118,31 @@ def _parse_translation_output(raw: str, sig_text: str) -> TranslationResult:
         if len(lines) >= 3:
             text = "\n".join(lines[1:-1]).strip()
 
-    # Try to parse JSON; if that fails, try to salvage the first {...} block.
+    def _loads_first_json_object(s: str) -> object:
+        """Parse the first JSON value in a string, ignoring any trailing text."""
+
+        decoder = json.JSONDecoder()
+
+        # First try parsing from the beginning.
+        try:
+            obj, _end = decoder.raw_decode(s.lstrip())
+            return obj
+        except json.JSONDecodeError:
+            pass
+
+        # Otherwise, try starting from the first '{' (helps if the model
+        # prepends text like 'Sure, here is the JSON:').
+        start = s.find("{")
+        if start != -1:
+            obj, _end = decoder.raw_decode(s[start:])
+            return obj
+
+        raise json.JSONDecodeError("No JSON object found", s, 0)
+
     try:
-        obj = json.loads(text)
-    except json.JSONDecodeError:
-        if "{" in text and "}" in text:
-            candidate = text[text.find("{") : text.rfind("}") + 1]
-            try:
-                obj = json.loads(candidate)
-            except json.JSONDecodeError as e:  # pragma: no cover - defensive
-                raise ValueError(f"Could not parse LLM JSON output: {e}\nRaw: {raw}") from e
-        else:  # pragma: no cover - very unlikely for this demo
-            raise ValueError(f"LLM did not return JSON. Raw output: {raw}")
+        obj = _loads_first_json_object(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Could not parse LLM JSON output: {e}\nRaw: {raw}") from e
 
     if isinstance(obj, dict) and "english_instructions" in obj and "structured" in obj:
         structured = StructuredSig.model_validate(obj["structured"])
@@ -95,12 +152,46 @@ def _parse_translation_output(raw: str, sig_text: str) -> TranslationResult:
         )
 
     # Fallback: model only returned the structured part like {"sigs": [...]}.
+    # We return an empty english_instructions so the caller can do a targeted
+    # second attempt to generate just the English text.
     if isinstance(obj, dict) and "sigs" in obj:
         structured = StructuredSig.model_validate(obj)
-        # Use the raw sig_text as the "English" fallback for this demo.
-        return TranslationResult(english_instructions=sig_text, structured=structured)
+        return TranslationResult(english_instructions="", structured=structured)
 
     raise ValueError(f"Unexpected JSON schema from LLM: {obj}")
+
+
+def _generate_english_only(sig_text: str, examples_block: str) -> str:
+    """Fallback: ask the model for English only.
+
+    This is used when the primary translation call returns only {"sigs": ...}.
+    """
+
+    prompt_value = _english_only_prompt.invoke(
+        {
+            "examples_block": examples_block,
+            "sig_text": sig_text,
+        }
+    )
+    response = _llm.invoke(prompt_value)
+    raw = getattr(response, "content", response)
+
+    text = str(raw).strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if len(lines) >= 3:
+            text = "\n".join(lines[1:-1]).strip()
+
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError:
+        # If the model ignored the JSON-only instruction, just return the raw text.
+        return text
+
+    if isinstance(obj, dict) and "english_instructions" in obj:
+        return str(obj["english_instructions"]).strip()
+
+    return text
 
 
 def translate_sig(sig_text: str) -> Tuple[TranslationResult, List[Document]]:
@@ -117,10 +208,10 @@ def translate_sig(sig_text: str) -> Tuple[TranslationResult, List[Document]]:
     examples_block = _build_examples_block(docs)
 
     # Build a ChatPromptValue so the chat model receives a message object
-    # with a .to_messages() method (required in LangChain 0.3).
+    # with a .to_messages() method (required in LangChain ≥0.3).
     prompt_value = _prompt.invoke(
         {
-            "format_instructions": _format_instructions,
+            "format_instructions": _TRANSLATION_FORMAT_INSTRUCTIONS,
             "examples_block": examples_block,
             "sig_text": sig_text,
         }
@@ -128,5 +219,11 @@ def translate_sig(sig_text: str) -> Tuple[TranslationResult, List[Document]]:
     response = _llm.invoke(prompt_value)
     raw = getattr(response, "content", response)
 
-    result = _parse_translation_output(str(raw), sig_text=sig_text)
+    result = _parse_translation_output(str(raw))
+
+    # If the model returned only structured JSON, do a cheap second call to
+    # generate the missing English instructions.
+    if not (result.english_instructions or "").strip():
+        result.english_instructions = _generate_english_only(sig_text=sig_text, examples_block=examples_block)
+
     return result, docs
