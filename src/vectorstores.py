@@ -48,12 +48,16 @@ def build_sig_examples_store(rebuild: bool = True) -> Chroma:
             if not line:
                 continue
             record = json.loads(line)
+            # Chroma's metadata must be scalar types; store the structured
+            # instructions as a JSON string so we can still show them in
+            # prompts and logs without violating Chroma's constraints.
+            structured_json_str = json.dumps(record["structured_instructions"], ensure_ascii=False)
             docs.append(
                 Document(
                     page_content=record["sig_text"],
                     metadata={
                         "english_instructions": record["english_instructions"],
-                        "structured_instructions": record["structured_instructions"],
+                        "structured_instructions": structured_json_str,
                     },
                 )
             )
