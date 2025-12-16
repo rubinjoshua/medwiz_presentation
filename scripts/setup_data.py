@@ -287,21 +287,26 @@ def write_input_sigs(path: Path) -> None:
 
     Columns: patient_name, drug_name, drug_code, sig_text.
     Includes 6 reasonable ("good") sigs and 4 intentionally odd/unsafe ones.
+
+    Note: We keep the patient name order stable for the presentation, but we
+    intersperse the 4 problematic sigs so they don't all appear at the end of the
+    input table.
     """
 
     rows = [
-        # Good examples
+        # Patient-name order is fixed; drug+sig pairs are interleaved.
         {
             "patient_name": "Alice Smith",
             "drug_name": "Paracetamol 500mg",
             "drug_code": "PARA500",
             "sig_text": "1 tab po q6h prn pain (max 4/day)",
         },
+        # problematic
         {
             "patient_name": "Bob Jones",
             "drug_name": "Ibuprofen 200mg",
             "drug_code": "IBU200",
-            "sig_text": "1 tab po tid with food",
+            "sig_text": "3 tabs po q4h x3d",
         },
         {
             "patient_name": "Carlos Diaz",
@@ -309,11 +314,12 @@ def write_input_sigs(path: Path) -> None:
             "drug_code": "AMOX500",
             "sig_text": "1 cap po tid x7d",
         },
+        # problematic
         {
             "patient_name": "Dana Lee",
             "drug_name": "Atorvastatin 20mg",
             "drug_code": "ATOR20",
-            "sig_text": "1 tab po qhs x30d",
+            "sig_text": "1 tab po tid x90d",
         },
         {
             "patient_name": "Ethan Chen",
@@ -321,36 +327,37 @@ def write_input_sigs(path: Path) -> None:
             "drug_code": "METF500",
             "sig_text": "1 tab po bid with meals",
         },
+        # problematic
         {
             "patient_name": "Fatima Khan",
-            "drug_name": "Omeprazole 20mg",
-            "drug_code": "OMEP20",
-            "sig_text": "1 cap po qam before breakfast x14d",
-        },
-        # Intentionally problematic / odd examples
-        {
-            "patient_name": "George Hill",
             "drug_name": "Paracetamol 500mg",
             "drug_code": "PARA500",
             "sig_text": "2 tabs po q2h x5d",
         },
         {
-            "patient_name": "Hannah Fox",
-            "drug_name": "Ibuprofen 200mg",
-            "drug_code": "IBU200",
-            "sig_text": "3 tabs po q4h x3d",
+            "patient_name": "George Hill",
+            "drug_name": "Omeprazole 20mg",
+            "drug_code": "OMEP20",
+            "sig_text": "1 cap po qam before breakfast x14d",
         },
+        # problematic
         {
-            "patient_name": "Ian Wright",
+            "patient_name": "Hannah Fox",
             "drug_name": "Amoxicillin 500mg",
             "drug_code": "AMOX500",
             "sig_text": "1 cap po q2h x10d",
         },
         {
+            "patient_name": "Ian Wright",
+            "drug_name": "Ibuprofen 200mg",
+            "drug_code": "IBU200",
+            "sig_text": "1 tab po tid with food",
+        },
+        {
             "patient_name": "Julia Park",
             "drug_name": "Atorvastatin 20mg",
             "drug_code": "ATOR20",
-            "sig_text": "1 tab po tid x90d",
+            "sig_text": "1 tab po qhs x30d",
         },
     ]
 
