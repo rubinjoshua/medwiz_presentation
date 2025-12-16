@@ -23,6 +23,6 @@ SIG_K = 2
 MED_K = 2
 
 # Presentation settings
-SLEEP_TRANSLATION_STAGE = 2.0  # seconds between major log steps in translation
-SLEEP_VALIDATION_STAGE = 2.0   # seconds between major log steps in validation
-DISPLAY_REFRESH_SECONDS = 1.0  # refresh interval for right-hand display
+SLEEP_TRANSLATION_STAGE = 0.25  # seconds between major log steps in translation
+SLEEP_VALIDATION_STAGE = 0.25   # seconds between major log steps in validation
+DISPLAY_REFRESH_SECONDS = 0.125  # refresh interval for right-hand display

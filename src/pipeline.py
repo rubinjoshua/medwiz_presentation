@@ -21,6 +21,55 @@ def _pretty_json(data: object) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False)
 
 
+def _yaml_escape_scalar(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+
+    s = str(value)
+    # Quote strings that could be misinterpreted by YAML or contain special characters.
+    if s == "" or any(ch in s for ch in [":", "#", "\n", "\t", "\r", "{", "}", "[", "]"]):
+        s = s.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{s}"'
+    return s
+
+
+def _to_yaml_string(obj: object, indent: int = 0) -> str:
+    """Small YAML formatter for dict/list scalars.
+
+    Avoids adding a PyYAML dependency for the demo.
+    """
+
+    pad = "  " * indent
+
+    if isinstance(obj, dict):
+        lines: list[str] = []
+        for k, v in obj.items():
+            key = str(k)
+            if isinstance(v, (dict, list)):
+                lines.append(f"{pad}{key}:")
+                lines.append(_to_yaml_string(v, indent=indent + 1))
+            else:
+                lines.append(f"{pad}{key}: {_yaml_escape_scalar(v)}")
+        return "\n".join(lines)
+
+    if isinstance(obj, list):
+        lines = []
+        for item in obj:
+            if isinstance(item, (dict, list)):
+                # Hyphen + nested block
+                lines.append(f"{pad}-")
+                lines.append(_to_yaml_string(item, indent=indent + 1))
+            else:
+                lines.append(f"{pad}- {_yaml_escape_scalar(item)}")
+        return "\n".join(lines)
+
+    return f"{pad}{_yaml_escape_scalar(obj)}"
+
+
 def run_demo() -> None:
     """Run the full demo pipeline over the 10-row input_sigs.csv.
 
@@ -35,6 +84,7 @@ def run_demo() -> None:
 
     input_path = DATA_DIR / "input_sigs.csv"
     output_path = DATA_DIR / "output_sigs.csv"
+    translated_path = DATA_DIR / "translated_sigs.csv"
 
     if not input_path.exists():
         raise FileNotFoundError(
@@ -44,6 +94,7 @@ def run_demo() -> None:
     df = pd.read_csv(input_path)
 
     results_rows = []
+    translated_rows = []
 
     _print_header("Starting Medwiz sig translation + validation demo")
     print(f"Reading {len(df)} prescriptions from {input_path}...\n")
@@ -61,6 +112,16 @@ def run_demo() -> None:
         # --- Translation stage ---
         print("[Translation] Retrieving similar sig examples from local vector DB...\n")
         translation_result, example_docs = translate_sig(sig_text)
+
+        # Write translation-only output immediately so the translation table can update
+        # before validation starts.
+        translated_row = {
+            "sig": sig_text,
+            "english_translation": translation_result.english_instructions,
+            "structured_sig": _to_yaml_string(translation_result.structured.model_dump()),
+        }
+        translated_rows.append(translated_row)
+        pd.DataFrame(translated_rows).to_csv(translated_path, index=False)
 
         for i, doc in enumerate(example_docs, start=1):
             meta = doc.metadata or {}
@@ -115,6 +176,8 @@ def run_demo() -> None:
             ),
             "validation_decision": validation_result.decision,
             "validation_reason": validation_result.reason,
+            "ai_validation": validation_result.emoji,
+            # Back-compat for older display code / CSV consumers
             "ai_validated_emoji": validation_result.emoji,
         }
         results_rows.append(output_row)

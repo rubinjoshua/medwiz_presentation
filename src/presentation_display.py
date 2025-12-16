@@ -15,81 +15,79 @@ from .config import DATA_DIR, DISPLAY_REFRESH_SECONDS
 console = Console()
 
 
-def _make_input_table(df: pd.DataFrame) -> Table:
-    table = Table(title="Incoming prescriptions (semi-structured)")
-    for col in ["patient_name", "drug_name", "drug_code", "sig_text"]:
-        if col in df.columns:
-            table.add_column(col, style="cyan", overflow="fold")
+def _make_translation_table(df: pd.DataFrame) -> Table:
+    table = Table(title="AI translations (pre-validation)", expand=True)
+
+    # Keep the rows/columns/content consistent with the translation-only view.
+    table.add_column("sig", style="cyan", overflow="fold", ratio=1)
+    table.add_column("english_translation", style="green", overflow="fold", ratio=2)
+    table.add_column("structured_sig", style="white", overflow="fold", ratio=3)
 
     for row in df.itertuples(index=False):
         table.add_row(
-            str(getattr(row, "patient_name", "")),
-            str(getattr(row, "drug_name", "")),
-            str(getattr(row, "drug_code", "")),
-            str(getattr(row, "sig_text", "")),
+            str(getattr(row, "sig", "")),
+            str(getattr(row, "english_translation", "")),
+            str(getattr(row, "structured_sig", "")),
         )
+
     return table
 
 
 def _make_output_table(df: pd.DataFrame) -> Table:
     table = Table(title="AI translated + validated prescriptions")
 
+    # Column order:
+    # - ai_validation: emoji
+    # - validation_decision: brief explanation text (from validation_reason)
     columns = [
         ("patient_name", "white"),
         ("drug_name", "white"),
         ("drug_code", "white"),
         ("sig_text", "cyan"),
         ("english_instructions", "green"),
+        ("ai_validation", "bold"),
         ("validation_decision", "magenta"),
-        ("ai_validated_emoji", "bold"),
     ]
 
     for name, style in columns:
-        if name in df.columns:
-            table.add_column(name, style=style, overflow="fold")
+        table.add_column(name, style=style, overflow="fold")
 
     for row in df.itertuples(index=False):
+        ai_validation = getattr(row, "ai_validation", "") or getattr(row, "ai_validated_emoji", "")
+        validation_text = getattr(row, "validation_reason", "") or getattr(row, "validation_decision", "")
+
         table.add_row(
             str(getattr(row, "patient_name", "")),
             str(getattr(row, "drug_name", "")),
             str(getattr(row, "drug_code", "")),
             str(getattr(row, "sig_text", "")),
             str(getattr(row, "english_instructions", "")),
-            str(getattr(row, "validation_decision", "")),
-            str(getattr(row, "ai_validated_emoji", "")),
+            str(ai_validation),
+            str(validation_text),
         )
     return table
 
 
-def _build_layout(input_df: pd.DataFrame, output_df: pd.DataFrame) -> Layout:
+def _build_layout(translated_df: pd.DataFrame, output_df: pd.DataFrame) -> Layout:
     layout = Layout()
     layout.split_column(
         Layout(name="top", ratio=1),
-        Layout(name="middle", ratio=1),
-        Layout(name="bottom", size=5),
+        Layout(name="bottom", ratio=1),
     )
-    layout["top"].update(_make_input_table(input_df))
-    layout["middle"].update(_make_output_table(output_df))
-
-    help_table = Table(show_header=False, box=None)
-    help_table.add_column("msg", style="yellow")
-    help_table.add_row(
-        "Type new prescriptions in the terminal below while this screen is running. "
-        "They will appear in the top table as soon as you add them."
-    )
-    layout["bottom"].update(help_table)
+    layout["top"].update(_make_translation_table(translated_df))
+    layout["bottom"].update(_make_output_table(output_df))
     return layout
 
 
-def _display_loop(input_path: Path, output_path: Path, stop_event: threading.Event) -> None:
+def _display_loop(translated_path: Path, output_path: Path, stop_event: threading.Event) -> None:
     """Background loop that keeps the tables refreshed."""
 
     with Live(console=console, screen=True, auto_refresh=False) as live:
         while not stop_event.is_set():
-            if input_path.exists():
-                input_df = pd.read_csv(input_path)
+            if translated_path.exists():
+                translated_df = pd.read_csv(translated_path)
             else:
-                input_df = pd.DataFrame(columns=["patient_name", "drug_name", "drug_code", "sig_text"])
+                translated_df = pd.DataFrame(columns=["sig", "english_translation", "structured_sig"])
 
             if output_path.exists():
                 output_df = pd.read_csv(output_path)
@@ -101,76 +99,40 @@ def _display_loop(input_path: Path, output_path: Path, stop_event: threading.Eve
                         "drug_code",
                         "sig_text",
                         "english_instructions",
+                        "ai_validation",
                         "validation_decision",
+                        "validation_reason",
+                        # Back-compat (older output files)
                         "ai_validated_emoji",
                     ]
                 )
 
-            layout = _build_layout(input_df, output_df)
+            layout = _build_layout(translated_df, output_df)
             live.update(layout, refresh=True)
             time.sleep(DISPLAY_REFRESH_SECONDS)
 
 
-def _input_loop(input_path: Path, stop_event: threading.Event) -> None:
-    """Foreground loop that lets you add rows while the tables are visible."""
-
-    console.print(
-        "\n[bold]Interactive input:[/bold] While the tables are shown above, you can "
-        "add new prescriptions. These will be picked up by the left-hand "
-        "pipeline the next time it processes rows from input_sigs.csv.\n"
-    )
-
-    while not stop_event.is_set():
-        answer = console.input("Add a new prescription row? [y/N]: ").strip().lower()
-        if answer not in {"y", "yes"}:
-            # Small pause so the Live display can repaint cleanly.
-            time.sleep(0.2)
-            continue
-
-        if input_path.exists():
-            df = pd.read_csv(input_path)
-        else:
-            df = pd.DataFrame(columns=["patient_name", "drug_name", "drug_code", "sig_text"])
-
-        patient_name = console.input("  Patient name: ").strip()
-        drug_name = console.input("  Drug name (as it appears in your DB): ").strip()
-        drug_code = console.input("  Drug code (free text is fine): ").strip()
-        sig_text = console.input("  Sig text (free-hand instructions): ").strip()
-
-        new_row = {
-            "patient_name": patient_name,
-            "drug_name": drug_name,
-            "drug_code": drug_code,
-            "sig_text": sig_text,
-        }
-        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-        df.to_csv(input_path, index=False)
-        console.print("[green]  Added row to input table and saved to input_sigs.csv.[/green]\n")
 
 
 def run_display() -> None:
-    """Continuously display the input and output tables and accept new rows.
+    """Continuously display the translation + validated output tables.
 
     Intended to run in the right-hand pane during the presentation.
     """
 
-    input_path = DATA_DIR / "input_sigs.csv"
+    translated_path = DATA_DIR / "translated_sigs.csv"
     output_path = DATA_DIR / "output_sigs.csv"
-
-    if not input_path.exists():
-        console.print(f"[red]Expected input file {input_path} to exist. Run `python scripts/setup_data.py` first.[/red]")
-        return
-
-    console.print("Starting live display. You can add new rows at any time below.\n")
 
     stop_event = threading.Event()
     display_thread = threading.Thread(
-        target=_display_loop, args=(input_path, output_path, stop_event), daemon=True
+        target=_display_loop, args=(translated_path, output_path, stop_event), daemon=True
     )
     display_thread.start()
 
     try:
-        _input_loop(input_path, stop_event)
+        # Keep the main thread alive so Ctrl+C works.
+        while True:
+            time.sleep(0.2)
     except KeyboardInterrupt:
         console.print("\n[yellow]Stopping live display...[/yellow]")
         stop_event.set()

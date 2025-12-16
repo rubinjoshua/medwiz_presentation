@@ -216,10 +216,17 @@ def translate_sig(sig_text: str) -> Tuple[TranslationResult, List[Document]]:
             "sig_text": sig_text,
         }
     )
-    response = _llm.invoke(prompt_value)
-    raw = getattr(response, "content", response)
-
-    result = _parse_translation_output(str(raw))
+    got_response = False
+    while True:
+        response = _llm.invoke(prompt_value)
+        raw = getattr(response, "content", response)
+        try:
+            result = _parse_translation_output(str(raw))
+            got_response = True
+        except ValueError as e:
+            print(f"Got exception on parse: \n{e}\n, trying llm call again...")
+        if got_response:
+            break
 
     # If the model returned only structured JSON, do a cheap second call to
     # generate the missing English instructions.

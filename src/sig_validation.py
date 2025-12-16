@@ -22,21 +22,20 @@ _prompt = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "You are a cautious clinical pharmacist. You check whether dosing "
-            "instructions (sigs) are reasonable for a specific drug, using given "
-            "reference information.\n\n"
-            "You must answer in JSON ONLY, matching the schema.\n\n"
+            "You are a clinical pharmacist doing a quick safety screen of a prescription sig. "
+            "Your goal is to flag only clear safety problems.\n\n"
+            "Be pragmatic: if the instructions look plausible and not clearly unsafe based on the reference, return OK. "
+            "Use NOT_OK only when the sig is clearly unsafe or clearly contradicts the reference (e.g., extreme dose/frequency, wrong route/form, dangerous duration).\n\n"
+            "Return JSON ONLY, matching the schema.\n"
+            "The 'reason' must be brief (<= 60 characters, no newlines).\n\n"
             "{format_instructions}",
         ),
         (
             "human",
             "Drug name: {drug_name}\n"
-            "New case instructions: {english_instructions}\n\n"
-            "Here is reference information about this and similar drugs:\n\n{reference_block}\n\n"
-            "Based ONLY on the reference information and basic pharmacologic safety, "
-            "decide whether the dosing instructions are acceptable. "
-            "Set decision to 'OK' if clearly acceptable, otherwise 'NOT_OK'. "
-            "Give a short, clear reason.",
+            "Sig (English): {english_instructions}\n\n"
+            "Reference info:\n{reference_block}\n\n"
+            "Decide OK vs NOT_OK, and provide a brief reason.",
         ),
     ]
 )
@@ -120,6 +119,12 @@ def validate_sig(drug_name: str, english_instructions: str) -> Tuple[ValidationR
     raw = getattr(response, "content", response)
 
     result = _parse_validation_output(str(raw))
+
+    # Keep the display text short and single-line for the live table.
+    reason = (result.reason or "").replace("\n", " ").strip()
+    if len(reason) > 60:
+        reason = reason[:57].rstrip() + "..."
+    result.reason = reason
 
     # Map decision to emoji here for convenience (LLM can ignore emoji logic).
     decision_upper = (result.decision or "").strip().upper()
